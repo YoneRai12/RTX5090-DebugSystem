@@ -70,8 +70,6 @@ class Config:
     log_max_bytes: int = int(os.environ.get("PHOENIX_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
     max_backups_per_file: int = int(os.environ.get("PHOENIX_MAX_BACKUPS", "20"))
     cooldown_seconds_on_stop: int = int(os.environ.get("PHOENIX_COOLDOWN_SECONDS", "0"))
-    lock_path: Path = dataclasses.field(default_factory=lambda: Path(".phoenix_cli/train.lock"))
-    lock_stale_seconds: int = int(os.environ.get("PHOENIX_LOCK_STALE", "3600"))
 
     def ensure_dirs(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -168,83 +166,6 @@ class StateStore:
             self._state["retries"][signature] = int(self._state["retries"].get(signature, 0)) + 1
             self._save()
             return int(self._state["retries"][signature])
-
-
-class FileLock:
-    def __init__(self, cfg: Config, logger: Logger) -> None:
-        self.cfg = cfg
-        self.logger = logger
-        self._locked = False
-
-    def __enter__(self) -> "FileLock":
-        self.acquire()
-        return self
-
-    def __exit__(self, exc_type, exc: BaseException, tb: Any) -> None:
-        self.release()
-
-    def _is_process_alive(self, pid: int) -> bool:
-        if pid <= 0:
-            return False
-        if os.name == "nt":
-            # Best-effort: on Windows without psutil, assume alive unless stale timeout triggers
-            return True
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
-
-    def acquire(self) -> None:
-        path = self.cfg.lock_path
-        stale = self.cfg.lock_stale_seconds
-        if path.exists():
-            try:
-                info = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
-            except Exception:
-                info = {}
-            pid = int(info.get("pid", -1)) if isinstance(info, dict) else -1
-            age = time.time() - path.stat().st_mtime
-            alive = self._is_process_alive(pid)
-            if stale > 0 and age > stale and not alive:
-                try:
-                    path.unlink()
-                    self.logger.log(
-                        f"LOCK stale pid={pid} age={age:.0f}s -> removed"
-                    )
-                except Exception:
-                    pass
-            else:
-                raise RuntimeError(
-                    f"Lock file {path} exists (pid={pid}, age={age:.0f}s). Another process may be running."
-                )
-
-        data = json.dumps({"pid": os.getpid(), "created_at": _now()})
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        fd = os.open(str(path), flags)
-        with os.fdopen(fd, "w", encoding="utf-8", errors="ignore") as f:
-            f.write(data)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except Exception:
-                pass
-        self._locked = True
-        self.logger.log(f"LOCK acquired at {path}")
-
-    def release(self) -> None:
-        if not self._locked:
-            return
-        try:
-            self.cfg.lock_path.unlink()
-        except FileNotFoundError:
-            pass
-        except Exception:
-            self.logger.log("LOCK release failed (ignored)")
-        finally:
-            self._locked = False
 
 
 class GeminiCLIClient:
@@ -676,19 +597,19 @@ class ErrorHandler:
         last_tb = tb_matches[-1].group(0) if tb_matches else ""
         return exc_name + " " + exc_msg, last_tb
 
-    def _error_signature(self, exit_code: int, stderr_tail: str, target: Path, reason: str) -> str:
+    def _error_signature(self, exit_code: int, stderr_tail: str, target: Path) -> str:
         sanitized = self._sanitize_log(stderr_tail)
         exc_line, last_tb = self._extract_exception_info(sanitized)
         head = "\n".join((sanitized or "").splitlines()[:20])
-        base = f"rc={exit_code}\nreason={reason}\nfile={target.name}\n{exc_line}\n{last_tb}\n{head}"
+        base = f"rc={exit_code}\nfile={target.name}\n{exc_line}\n{last_tb}\n{head}"
         return _sha256(base)
 
-    def handle_failure(self, exit_code: int, stderr_tail: str, stdout_tail: str, reason: str) -> bool:
+    def handle_failure(self, exit_code: int, stderr_tail: str, stdout_tail: str) -> bool:
         target, line_no = self._select_target_from_traceback(stderr_tail)
         if target is None:
             target = self._fallback_target()
 
-        signature = self._error_signature(exit_code, stderr_tail, target, reason)
+        signature = self._error_signature(exit_code, stderr_tail, target)
         attempt = self.state.get_retry(signature)
         if attempt >= self.cfg.max_retries_per_signature:
             self.logger.log(f"STOP retries exceeded signature={signature} target={target}")
@@ -698,7 +619,7 @@ class ErrorHandler:
         for _ in range(2):
             current_attempt = self.state.get_retry(signature) + 1
             self.logger.log(
-                f"FAIL rc={exit_code} reason={reason} target={target} signature={signature} attempt={current_attempt}"
+                f"FAIL rc={exit_code} target={target} signature={signature} attempt={current_attempt}"
             )
             prompt = self._build_prompt(target, line_no, stderr_tail, stdout_tail, previous_error)
             data = self._call_llm(prompt, target)
@@ -828,7 +749,7 @@ class ProcessManager:
             except Exception:
                 pass
 
-    def run_training(self) -> Tuple[int, str, str, str]:
+    def run_training(self) -> Tuple[int, str, str]:
         self.logger.log(f"RUN {' '.join(self.cfg.train_cmd)}")
         proc = self._start_process()
 
@@ -848,8 +769,6 @@ class ProcessManager:
         t_out.start()
         t_err.start()
 
-        reason = "exit_code"
-
         def watchdog() -> None:
             timeout = self.cfg.heartbeat_timeout_min * 60
             if timeout <= 0:
@@ -865,8 +784,6 @@ class ProcessManager:
                         f"HEARTBEAT timeout {idle:.1f}s without output -> kill process tree"
                     )
                     self._kill_process_tree(proc)
-                    nonlocal reason
-                    reason = "heartbeat_timeout"
                     stop_event.set()
                     return
 
@@ -883,7 +800,7 @@ class ProcessManager:
         if rc != 0:
             self._kill_process_tree(proc)
 
-        return rc, err_buf.tail_text(), out_buf.tail_text(), reason
+        return rc, err_buf.tail_text(), out_buf.tail_text()
 
 
 def main() -> int:
@@ -894,29 +811,28 @@ def main() -> int:
     handler = ErrorHandler(cfg, logger, state)
     process_manager = ProcessManager(cfg, logger)
 
-    with FileLock(cfg, logger):
-        while True:
-            exit_code, stderr_tail, stdout_tail, reason = process_manager.run_training()
-            if exit_code == 0:
-                logger.log("DONE training finished successfully")
-                return 0
+    while True:
+        exit_code, stderr_tail, stdout_tail = process_manager.run_training()
+        if exit_code == 0:
+            logger.log("DONE training finished successfully")
+            return 0
 
-            try:
-                fixed = handler.handle_failure(exit_code, stderr_tail, stdout_tail, reason)
-            except Exception as exc:  # pragma: no cover - defensive log path
-                logger.log(f"FATAL during handle_failure: {exc}")
-                return 2
+        try:
+            fixed = handler.handle_failure(exit_code, stderr_tail, stdout_tail)
+        except Exception as exc:  # pragma: no cover - defensive log path
+            logger.log(f"FATAL during handle_failure: {exc}")
+            return 2
 
-            if not fixed:
-                if cfg.cooldown_seconds_on_stop > 0:
-                    logger.log(
-                        f"COOLDOWN waiting {cfg.cooldown_seconds_on_stop}s before stopping after repeated failures"
-                    )
-                    time.sleep(cfg.cooldown_seconds_on_stop)
-                logger.log("STOP unable to auto fix")
-                return 1
+        if not fixed:
+            if cfg.cooldown_seconds_on_stop > 0:
+                logger.log(
+                    f"COOLDOWN waiting {cfg.cooldown_seconds_on_stop}s before stopping after repeated failures"
+                )
+                time.sleep(cfg.cooldown_seconds_on_stop)
+            logger.log("STOP unable to auto fix")
+            return 1
 
-            logger.log("RETRY restarting training after patch")
+        logger.log("RETRY restarting training after patch")
 
 
 if __name__ == "__main__":
