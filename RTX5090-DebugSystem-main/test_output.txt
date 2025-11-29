@@ -1,0 +1,31 @@
+DEBUG: Processing patch for C:\Users\YoneRai12\AppData\Local\Temp\tmpq33jubra\train.py
+DEBUG: Mapped C:\Users\YoneRai12\AppData\Local\Temp\tmpq33jubra\train.py to C:\Users\YONERA~1\AppData\Local\Temp\tmppse0hsz4\train.py
+{"schema_version": "v1", "ts": "2025-11-29T19:17:01+0900", "level": "INFO", "event": "dry_run_patch", "run_id": "7c04dd6f", "files": ["C:\\Users\\YoneRai12\\AppData\\Local\\Temp\\tmpq33jubra\\train.py"]}
+DEBUG: Processing patch for C:\Users\YoneRai12\AppData\Local\Temp\tmpusumeg8g\train.py
+DEBUG: Mapped C:\Users\YoneRai12\AppData\Local\Temp\tmpusumeg8g\train.py to C:\Users\YONERA~1\AppData\Local\Temp\tmpjpquolmg\train.py
+{"schema_version": "v1", "ts": "2025-11-29T19:17:01+0900", "level": "INFO", "event": "dry_run_patch", "run_id": "45b15831", "files": ["C:\\Users\\YoneRai12\\AppData\\Local\\Temp\\tmpusumeg8g\\train.py"]}
+{"schema_version": "v1", "ts": "2025-11-29T19:17:01+0900", "level": "INFO", "event": "lock_held", "run_id": "0f52b6bf", "pid": 96684}
+.FF......
+======================================================================
+FAIL: test_atomic_shadow_patching_fail_test (test_phoenix_cli_manager.TestPhoenixSafety.test_atomic_shadow_patching_fail_test)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\YoneRai12\Desktop\RTX5090-DebugSystem-main\RTX5090-DebugSystem-main\tests\test_phoenix_cli_manager.py", line 125, in test_atomic_shadow_patching_fail_test
+    self.assertFalse(ok)
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_atomic_shadow_patching_success (test_phoenix_cli_manager.TestPhoenixSafety.test_atomic_shadow_patching_success)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\YoneRai12\Desktop\RTX5090-DebugSystem-main\RTX5090-DebugSystem-main\tests\test_phoenix_cli_manager.py", line 103, in test_atomic_shadow_patching_success
+    self.assertEqual(target.read_text(encoding="utf-8"), "print('fixed')\n")
+AssertionError: "print('hello')\n" != "print('fixed')\n"
+- print('hello')
++ print('fixed')
+
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.420s
+
+FAILED (failures=2)
