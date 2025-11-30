@@ -106,13 +106,28 @@ Gemini や Grok などの外部APIがダウンした場合や、ネットワー�
 
 ### 設定方法
 
+#### 1. CLIモード (コマンド実行)
 環境変数 `PHOENIX_FALLBACK_LLM_CMD` に、ローカルLLMを呼び出すコマンドを設定します。
-このコマンドは、最後の引数として「プロンプト」を受け取り、標準出力に「修正パッチのJSON」を出力する必要があります。
 
 ```powershell
 # 例: ローカルの StarCoder を呼び出すスクリプトを指定
 $env:PHOENIX_FALLBACK_LLM_CMD = "python local_llm_client.py --model starcoder"
 ```
 
-これにより、メインのLLMがエラーを返すと、自動的にこのコマンドが実行されます。
+#### 2. APIモード (LM Studio / vLLM / llama.cpp)
+OpenAI互換のAPIサーバーがローカルで動いている場合（例: LM Studio）、以下のように設定します。
+
+```powershell
+$env:PHOENIX_FALLBACK_LLM_TYPE = "api"
+$env:PHOENIX_FALLBACK_LLM_URL = "http://localhost:1234/v1/chat/completions"
+$env:PHOENIX_FALLBACK_LLM_MODEL = "local-model" # 必要ならモデル名を指定
+```
+
+### 推奨ローカルモデル (RTX5090向け)
+*   **DeepSeek Coder 33B**: コーディング性能が非常に高い。48GB VRAMなら余裕。
+*   **Code Llama 34B**: Meta製の強力なモデル。
+*   **StarCoder2 15B**: 高速で精度が良い。32GB VRAMでも快適。
+*   **Phi-3 Medium**: 軽量ながら非常に賢い。
+
+これにより、メインのLLMがエラーを返すと、自動的にローカルLLMが引き継ぎます。
 RTX5090 のパワーを活かして、外部依存なしで自律的に修復し続けることが可能です。
