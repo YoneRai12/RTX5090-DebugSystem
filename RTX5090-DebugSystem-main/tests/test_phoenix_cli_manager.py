@@ -133,7 +133,9 @@ class TestPhoenixSafety(unittest.TestCase):
 
     def test_fallback_llm(self):
         # Configure fallback
-        self.cfg.fallback_llm_cmd = [sys.executable, str(self.root / "tests/dummy_fallback_llm.py")]
+        cmd = [sys.executable, str(self.root / "tests/dummy_fallback_llm.py")]
+        self.cfg.fallback_llm_cmds = [cmd]
+        self.cfg.fallback_llm_cmd = cmd
         
         # Create dummy fallback script
         dummy_script = self.root / "tests/dummy_fallback_llm.py"
